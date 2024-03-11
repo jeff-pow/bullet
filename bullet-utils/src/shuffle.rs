@@ -1,8 +1,6 @@
-use std::hash::Hash;
-use std::io::BufRead;
 use std::{
-    fs::{self, create_dir, remove_dir_all, File},
-    io::{BufReader, BufWriter, Read, Result, Seek, Write},
+    fs::{self, create_dir, File},
+    io::{BufWriter, Read, Result, Write},
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -13,44 +11,44 @@ use structopt::StructOpt;
 
 #[derive(StructOpt)]
 pub struct ShuffleOptions {
-    // #[structopt(required = true, short, long)]
+    #[structopt(required = true, short, long)]
     pub input: PathBuf,
-    // #[structopt(required = true, short, long)]
+    #[structopt(required = true, short, long)]
     pub output: PathBuf,
-    // #[structopt(required = true, short, long)]
-    /// Maximum RAM the program should use for its buffer, in MB
-    pub mem_used: usize,
+    #[structopt(required = true, short, long)]
+    pub mem_used_mb: usize,
+    #[structopt(required = true, short, long)]
+    pub tmp_dir: PathBuf,
 }
 
-const TMP_PATH: &str = "../../tmp";
 const CHESS_BOARD_SIZE: usize = std::mem::size_of::<ChessBoard>();
+const MIN_TMP_FILES: usize = 4;
 
 impl ShuffleOptions {
     pub fn run(&self) {
-        let input_size_mb = fs::metadata(self.input.clone())
+        let input_size = fs::metadata(self.input.clone())
             .expect("Input file is valid")
             .len() as usize;
-        let num_tmp_files = input_size_mb / self.mem_used + 1;
-        dbg!(num_tmp_files);
-        dbg!(input_size_mb / CHESS_BOARD_SIZE);
+        let num_tmp_files = (input_size / (self.mem_used_mb * 1000) + 1).max(MIN_TMP_FILES);
 
-        if !Path::new(TMP_PATH).exists() {
-            create_dir(TMP_PATH).expect("Path could be created");
+        if !Path::new(&self.tmp_dir).exists() {
+            create_dir(self.tmp_dir.clone()).expect("Path could be created");
         }
         let mut temp_files = (0..num_tmp_files)
             .map(|idx| {
-                let output_file = format!("{}/part_{}.bin", TMP_PATH, idx + 1);
+                let output_file =
+                    format!("{}/part_{}.bin", self.tmp_dir.to_str().unwrap(), idx + 1);
                 File::create(output_file).unwrap()
             })
             .collect::<Vec<_>>();
 
         println!("# [Shuffling Data]");
         let time = Instant::now();
-        assert!(self.split_file(&mut temp_files).is_ok());
-        assert!(rewind_files(&mut temp_files).is_ok());
+        assert!(self.split_file(&mut temp_files, input_size).is_ok());
         let mut temp_files = (0..num_tmp_files)
             .map(|idx| {
-                let output_file = format!("{}/part_{}.bin", TMP_PATH, idx + 1);
+                let output_file =
+                    format!("{}/part_{}.bin", self.tmp_dir.to_str().unwrap(), idx + 1);
                 File::open(output_file).unwrap()
             })
             .collect::<Vec<_>>();
@@ -61,13 +59,13 @@ impl ShuffleOptions {
         println!("> Took {:.2} seconds.", time.elapsed().as_secs_f32());
     }
 
-    fn split_file(&self, temp_files: &mut [File]) -> Result<()> {
+    fn split_file(&self, temp_files: &mut [File], input_size: usize) -> Result<()> {
         let mut input = File::open(self.input.clone()).unwrap();
 
-        dbg!(self.actual_buffer_size());
+        let buff_size = self.actual_buffer_size(temp_files.len(), input_size);
 
         for file in temp_files.iter_mut() {
-            let mut buffer = vec![0u8; self.actual_buffer_size()];
+            let mut buffer = vec![0u8; buff_size];
             let bytes_read = input.read(&mut buffer)?;
 
             let data = util::to_slice_with_lifetime_mut(&mut buffer[0..bytes_read]);
@@ -99,33 +97,34 @@ impl ShuffleOptions {
             let remaining = populations.iter().sum::<usize>() as f64;
             let probs = populations
                 .iter()
-                .map(|&p| {
-                    if p == 0 {
-                        0.
-                    } else {
-                        p as f64 / remaining
-                    }
-                })
+                .map(|&p| p as f64 / remaining)
                 .collect::<Vec<_>>();
 
             let idx = pick_index(&probs, &mut rng);
             populations[idx] -= 1;
             let mut buffer = [0; CHESS_BOARD_SIZE];
-            temp_files[idx].read_exact(&mut buffer).expect("Read bruh");
-            assert_eq!(CHESS_BOARD_SIZE, output.write(&buffer).expect("Write bruh"));
+            temp_files[idx]
+                .read_exact(&mut buffer)
+                .expect("Chess position couldn't be read from tmp file.");
+            assert_eq!(
+                CHESS_BOARD_SIZE,
+                output
+                    .write(&buffer)
+                    .expect("Chess position couldn't be written to output.")
+            );
         }
         Ok(())
     }
 
-    fn actual_buffer_size(&self) -> usize {
-        self.mem_used / CHESS_BOARD_SIZE * CHESS_BOARD_SIZE
+    /// Input size should be in bytes
+    fn actual_buffer_size(&self, num_tmp_files: usize, input_size: usize) -> usize {
+        input_size / num_tmp_files / CHESS_BOARD_SIZE * CHESS_BOARD_SIZE + CHESS_BOARD_SIZE
     }
 }
 
 fn pick_index(probs: &[f64], rng: &mut Rand) -> usize {
-    assert!((1.0 - probs.iter().sum::<f64>()).abs() < f64::EPSILON);
     let rand_num = f64::from(rng.rand(1.0)).abs();
-    assert!(0. <= rand_num && rand_num <= 1.0);
+    assert!((0. ..=1.0).contains(&rand_num));
 
     let mut total_prob = 0.0;
     for (i, &prob) in probs.iter().enumerate() {
@@ -144,11 +143,4 @@ fn shuffle_positions(data: &mut [ChessBoard]) {
         let idx = rng.rand_int() as usize % (i + 1);
         data.swap(idx, i);
     }
-}
-
-fn rewind_files(files: &mut [File]) -> Result<()> {
-    for file in files {
-        file.seek(std::io::SeekFrom::Start(0))?;
-    }
-    Ok(())
 }

@@ -4,7 +4,6 @@ mod interleave;
 mod shuffle;
 mod validate;
 
-use crate::shuffle::ShuffleOptions;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
@@ -16,10 +15,17 @@ pub enum Options {
 }
 
 fn main() {
-    let s = ShuffleOptions {
-        input: "sample.bin".into(),
-        output: "bruh.bin".into(),
-        mem_used: 1_000_000,
-    };
-    s.run();
+    match Options::from_args() {
+        Options::Convert(options) => options.run(),
+        Options::Interleave(options) => options.run(),
+        Options::Shuffle(options) => options.run(),
+        Options::Validate(options) => options.run(),
+    }
+    // let s = ShuffleOptions {
+    //     input: "sample.bin".into(),
+    //     output: "bruh.bin".into(),
+    //     mem_used: 1_000_000,
+    //     tmp_dir: "tmp".into(),
+    // };
+    // s.run();
 }
