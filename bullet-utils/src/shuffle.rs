@@ -59,7 +59,6 @@ impl ShuffleOptions {
         assert!(self.output(&mut temp_files).is_ok());
 
         println!("> Took {:.2} seconds.", time.elapsed().as_secs_f32());
-        assert!(remove_dir_all(TMP_PATH).is_ok());
     }
 
     fn split_file(&self, temp_files: &mut [File]) -> Result<()> {
